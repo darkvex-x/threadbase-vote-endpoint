@@ -8,21 +8,43 @@ if (!connectionString) {
   throw new Error("DATABASE_URL is missing from .env");
 }
 
+const databaseUrl = new URL(connectionString);
+
+const connectionLimit = Number(
+  databaseUrl.searchParams.get("connection_limit") ?? 5,
+);
+
+const poolTimeout = Number(databaseUrl.searchParams.get("pool_timeout") ?? 10);
+
+if (
+  !Number.isInteger(connectionLimit) ||
+  connectionLimit < 1 ||
+  !Number.isFinite(poolTimeout) ||
+  poolTimeout <= 0
+) {
+  throw new Error("Invalid connection_limit or pool_timeout in DATABASE_URL");
+}
+
 const adapter = new PrismaPg({
   connectionString,
-  max: 8,
-  connectionTimeoutMillis: 5000,
+  max: connectionLimit,
+  connectionTimeoutMillis: poolTimeout * 1000,
 });
 
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  // Warm up the database connection before measuring.
-  await prisma.$queryRaw`SELECT 1`;
+  console.log(`Connection limit: ${connectionLimit}`);
+  console.log(`Pool timeout: ${poolTimeout}s`);
+
+  // Warm up the database only for the fixed configuration.
+  if (connectionLimit > 1) {
+    await prisma.$queryRaw`SELECT 1`;
+  }
 
   const start = performance.now();
 
-  const results = await Promise.all(
+  const results = await Promise.allSettled(
     Array.from({ length: 8 }, async (_, index) => {
       const queryStart = performance.now();
 
@@ -37,8 +59,30 @@ async function main() {
 
   const totalMs = Math.round(performance.now() - start);
 
-  console.table(results);
-  console.log(`Successful requests: ${results.length}/8`);
+  const successful = results.filter((result) => result.status === "fulfilled");
+
+  const failed = results.filter((result) => result.status === "rejected");
+
+  console.table(
+    results.map((result, index) => {
+      if (result.status === "fulfilled") {
+        return {
+          request: index + 1,
+          status: "SUCCESS",
+          timeMs: result.value.timeMs,
+        };
+      }
+
+      return {
+        request: index + 1,
+        status: "FAILED",
+        error: String(result.reason).split("\n")[0],
+      };
+    }),
+  );
+
+  console.log(`Successful requests: ${successful.length}/8`);
+  console.log(`Failed requests: ${failed.length}/8`);
   console.log(`Total time: ${totalMs} ms`);
 }
 
