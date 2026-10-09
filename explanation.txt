@@ -1,0 +1,1 @@
+With `connection_limit=1`, eight concurrent requests must wait for a single connection, which can cause requests to time out; increasing it to `connection_limit=8` allows all eight requests to use available connection slots concurrently, reducing queueing and preventing pool-timeout failures.
